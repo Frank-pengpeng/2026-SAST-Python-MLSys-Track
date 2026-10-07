@@ -20,7 +20,7 @@ def add(x, y):
         Sum of x + y
     """
     ### BEGIN YOUR CODE
-    pass
+    return x + y
     ### END YOUR CODE
 
 
@@ -48,7 +48,29 @@ def parse_mnist(image_filename, label_filename):
                 for MNIST will contain the values 0-9.
     """
     ### BEGIN YOUR CODE
-    pass
+    # The MNIST files use the IDX binary format.  Integers are stored
+    # big-endian ("  >  "), and both files are gzip compressed:
+    #
+    #   images: magic(4) | num_images(4) | rows(4) | cols(4) | uint8 pixels
+    #   labels: magic(4) | num_labels(4)                          | uint8 labels
+    #
+    # We read the header with `struct` so that the pixel payload can be slurped
+    # straight into a numpy array with zero per-pixel Python loops.
+    with gzip.open(image_filename, "rb") as f:
+        magic, num_images, rows, cols = struct.unpack(">IIII", f.read(16))
+        X = np.frombuffer(f.read(), dtype=np.uint8).reshape(num_images, rows * cols)
+
+    with gzip.open(label_filename, "rb") as f:
+        magic, num_labels = struct.unpack(">II", f.read(8))
+        y = np.frombuffer(f.read(), dtype=np.uint8).reshape(num_labels)
+
+    # Normalize with respect to the *whole dataset* (255 is the max possible
+    # pixel value), not per image.  astype() also makes X writable, since
+    # frombuffer returns a read-only view onto the gzip buffer.
+    X = X.astype(np.float32) / 255.0
+    y = y.astype(np.uint8).copy()
+
+    return X, y
     ### END YOUR CODE
 
 
@@ -68,14 +90,22 @@ def softmax_loss(Z, y):
         Average softmax loss over the sample.
     """
     ### BEGIN YOUR CODE
-    pass
+    # loss = -1/b * sum_i log( exp(Z[i, y_i]) / sum_j exp(Z[i, j]) )
+    #      =  1/b * sum_i ( logsumexp(Z[i]) - Z[i, y_i] )
+    # Fully vectorized: one gather for the true-class logits, one row-wise
+    # log-sum-exp.  The max-shift keeps exp() in range and does not change the
+    # mathematical result.
+    Z = Z - Z.max(axis=1, keepdims=True)
+    log_partition = np.log(np.sum(np.exp(Z), axis=1))
+    log_prob_true = log_partition - Z[np.arange(Z.shape[0]), y]
+    return np.mean(log_prob_true)
     ### END YOUR CODE
 
 
 def softmax_regression_epoch(X, y, theta, lr = 0.1, batch=100):
     """ Run a single epoch of SGD for softmax regression on the data, using
-    the step size lr and specified batch size.  This function should modify the
-    theta matrix in place, and you should iterate through batches in X _without_
+    the step size lr and specified batch size.  This function should modify
+    the theta matrix in place, and you should iterate through batches in X _without_
     randomizing the order.
 
     Args:
@@ -91,7 +121,23 @@ def softmax_regression_epoch(X, y, theta, lr = 0.1, batch=100):
         None
     """
     ### BEGIN YOUR CODE
-    pass   
+    # For a minibatch of size b the gradient of the *mean* loss is
+    #     dL/dTheta = X_b^T (softmax(X_b Theta) - one_hot(y_b)) / b
+    # so the in-place SGD update is Theta -= lr * that.  Every step below is a
+    # single BLAS-backed numpy call; there is no Python loop over examples.
+    m = X.shape[0]
+    for start in range(0, m, batch):
+        X_b = X[start:start + batch]
+        y_b = y[start:start + batch]
+        b = X_b.shape[0]
+
+        Z = X_b @ theta                                   # (b, k) logits
+        Z = Z - Z.max(axis=1, keepdims=True)              # numerical stability
+        P = np.exp(Z)
+        P /= P.sum(axis=1, keepdims=True)                 # (b, k) softmax
+        P[np.arange(b), y_b] -= 1.0                       # softmax - one_hot(y)
+
+        theta -= lr * (X_b.T @ P) / b
     ### END YOUR CODE
 
 
@@ -118,7 +164,34 @@ def nn_epoch(X, y, W1, W2, lr = 0.1, batch=100):
         None
     """
     ### BEGIN YOUR CODE
-    pass
+    # Backprop through  logits = ReLU(X W1) W2  with softmax cross-entropy:
+    #   Z2     = H W2                          (H = ReLU(Z1), Z1 = X W1)
+    #   dZ2    = (softmax(Z2) - one_hot(y)) / b
+    #   dW2    = H^T dZ2
+    #   dZ1    = (dZ2 W2^T) * 1[Z1 > 0]        (ReLU subgradient)
+    #   dW1    = X^T dZ1
+    m = X.shape[0]
+    for start in range(0, m, batch):
+        X_b = X[start:start + batch]
+        y_b = y[start:start + batch]
+        b = X_b.shape[0]
+
+        Z1 = X_b @ W1                                     # (b, d) pre-activation
+        H = np.maximum(Z1, 0)                             # (b, d) ReLU
+        Z2 = H @ W2                                       # (b, k) logits
+
+        Z2 = Z2 - Z2.max(axis=1, keepdims=True)
+        P = np.exp(Z2)
+        P /= P.sum(axis=1, keepdims=True)
+        P[np.arange(b), y_b] -= 1.0                       # (b, k) dZ2 * b
+
+        dW2 = H.T @ P
+        dH = P @ W2.T
+        dZ1 = dH * (Z1 > 0)                               # (b, d)
+        dW1 = X_b.T @ dZ1
+
+        W2 -= lr * dW2 / b
+        W1 -= lr * dW1 / b
     ### END YOUR CODE
 
 
