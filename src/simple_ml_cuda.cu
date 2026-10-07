@@ -38,6 +38,13 @@ __global__ void softmax_gradient_kernel(const float *X,
 
         /// BEGIN YOUR CODE
         // Compute one element of X @ theta. Both arrays use row-major layout.
+        //   X[example, j]     -> X[example * n + j]
+        //   theta[j, class_id] -> theta[j * k + class_id]
+        // This thread owns the whole row `example`, so it walks the k columns
+        // and accumulates the dot product for each class in turn.
+        for (size_t j = 0; j < n; ++j) {
+            logit += X[example * n + j] * theta[j * k + class_id];
+        }
         /// END YOUR CODE
 
         logits_grad[example * k + class_id] = logit;
@@ -54,6 +61,12 @@ __global__ void softmax_gradient_kernel(const float *X,
     /// BEGIN YOUR CODE
     // Convert the stored exponentials into dL/dZ = softmax(Z) - one_hot(y).
     // Remember that logits_grad contains batch_size rows and k columns.
+    unsigned char label = y[example];
+    for (size_t class_id = 0; class_id < k; ++class_id) {
+        float softmax = logits_grad[example * k + class_id] / normalizer;
+        logits_grad[example * k + class_id] =
+            softmax - (class_id == static_cast<size_t>(label) ? 1.0f : 0.0f);
+    }
     /// END YOUR CODE
 }
 
@@ -76,6 +89,15 @@ __global__ void update_theta_kernel(const float *X,
     /// BEGIN YOUR CODE
     // Accumulate the minibatch gradient for theta[feature, class_id], then
     // perform the SGD update in place. Divide the gradient by batch_size.
+    //   grad = sum_i X[i, feature] * G[i, class_id]
+    //        = sum_i X[i * n + feature] * logits_grad[i * k + class_id]
+    // Each thread handles exactly one element of the (n x k) theta matrix,
+    // which is why `parameter` decomposes cleanly into (feature, class_id).
+    float grad = 0.0f;
+    for (size_t i = 0; i < batch_size; ++i) {
+        grad += X[i * n + feature] * logits_grad[i * k + class_id];
+    }
+    theta[parameter] -= lr * grad / static_cast<float>(batch_size);
     /// END YOUR CODE
 }
 
