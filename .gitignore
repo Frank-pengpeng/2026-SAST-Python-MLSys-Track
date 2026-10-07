@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Compiled extensions (build these locally: see README)
+*.so
+*.pyd
+*.o
+
+# MinGW import-library scratch dir
+build/
